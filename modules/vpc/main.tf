@@ -2,165 +2,120 @@
 # VPC - main.tf
 ################################################################################
 
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
+locals {
+  name_suffix = "${var.project_name}-${var.environment}"
+}
+
+locals {
+required_tags = {
+    project     = var.project_name,
+    environment = var.environment
+  }
+}
+
+locals {
+  subnet_tags = {
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"     = 1
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+module "vpc" { 
+  source  = var.source
   version = "~> 3.0"
 
-  name = local.name
-  cidr = local.vpc_cidr
+  name = var.vpc_name
+  cidr = var.vpc_cidr
 
-  azs             = local.azs
-  private_subnets = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 4, k)]
-  public_subnets  = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 48)]
-  intra_subnets   = [for k, v in local.azs : cidrsubnet(local.vpc_cidr, 8, k + 52)]
+    azs             = var.azs
+    private_subnets = var.private_subnets
+    public_subnets  = var.public_subnets
 
-  enable_ipv6                     = true
-  assign_ipv6_address_on_creation = true
-  create_egress_only_igw          = true
 
-  public_subnet_ipv6_prefixes  = [0, 1, 2]
-  private_subnet_ipv6_prefixes = [3, 4, 5]
+###################################################################
+#               Public Subnet & Networking
+###################################################################
 
-  enable_nat_gateway   = true
-  single_nat_gateway   = true
-  enable_dns_hostnames = true
+    #Internet gateway for the public subnet
+    aws_internet_gateway igw = {
+        vpc_id = aws_vpc.vpc.id
 
-  enable_flow_log                      = true
-  create_flow_log_cloudwatch_iam_role  = true
-  create_flow_log_cloudwatch_log_group = true
-
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = 1
-  }
-
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = 1
-  }
-
-  tags = local.tags
-}
-
-module "vpc_cni_irsa" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
-  version = "~> 5.0"
-
-  role_name_prefix      = "VPC-CNI-IRSA"
-  attach_vpc_cni_policy = true
-  vpc_cni_enable_ipv6   = true
-
-  oidc_providers = {
-    main = {
-      provider_arn               = module.eks.oidc_provider_arn
-      namespace_service_accounts = ["kube-system:aws-node"]
+        tags = merge(local.tags, { Name = "Internet-Gateway" })
+        tags = merge(local.tags, local.subnet_tags)
     }
-  }
 
-  tags = local.tags
-}
+    #Public subnet
+    aws_subnet public_subnet = {
+        vpc_id                  = aws_vpc.vpc.id
+        for_each                = var.public_subnets
+        availability_zone       = each.key
+        cidr_block              = each.value
+        map_public_ip_on_launch = "true" #makes this a public subnet
 
-module "ebs_kms_key" {
-  source  = "terraform-aws-modules/kms/aws"
-  version = "~> 1.1"
+        tags = merge(local.tags, { Name = "Public-Subnet" })
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-  description = "Customer managed key to encrypt EKS managed node group volumes"
+    #Route table for public subnet
+    aws_route_table public = {
+        vpc_id = aws_vpc.vpc.id
 
-  # Policy
-  key_administrators = [
-    data.aws_caller_identity.current.arn
-  ]
-  key_service_users = [
-    # required for the ASG to manage encrypted volumes for nodes
-    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling",
-    # required for the cluster / persistentvolume-controller to create encrypted PVCs
-    module.eks.cluster_iam_role_arn,
-  ]
+        tags = merge(local.tags, { Name = "Public-Route-Table" })
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-  # Aliases
-  aliases = ["eks/${local.name}/ebs"]
+    #aws_route adds a route to the aws_route_table
+    aws_route public_internet_gateway = {
+        route_table_id         = aws_route_table.public.id
+        destination_cidr_block = var.destination_cidr_block
+        gateway_id             = aws_internet_gateway.igw.id
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-  tags = local.tags
-}
+    #Route table associations
+    aws_route_table_association public = {
+        for_each       = var.public_subnets
+        subnet_id      = aws_subnet.public_subnets[each.key].id
+        route_table_id = aws_route_table.public.id
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-module "key_pair" {
-  source  = "terraform-aws-modules/key-pair/aws"
-  version = "~> 2.0"
 
-  key_name_prefix    = local.name
-  create_private_key = true
+###################################################################
+#               Private Subnet & Networking
+###################################################################
 
-  tags = local.tags
-}
+    #Private subnet
+    aws_subnet private_subnet = {
+        vpc_id                  = aws_vpc.vpc.id
+        for_each                = var.private_subnets
+        availability_zone       = each.key
+        cidr_block              = each.value
 
-resource "aws_security_group" "remote_access" {
-  name_prefix = "${local.name}-remote-access"
-  description = "Allow remote SSH access"
-  vpc_id      = module.vpc.vpc_id
+        tags = merge(local.tags, { Name = "Private-Subnet" })
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-  ingress {
-    description = "SSH access"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["10.0.0.0/8"]
-  }
+    # Route table for Private subnet
+    aws_route_table private = {
+        vpc_id = aws_vpc.vpc.id
 
-  egress {
-    from_port        = 0
-    to_port          = 0
-    protocol         = "-1"
-    cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
-  }
 
-  tags = merge(local.tags, { Name = "${local.name}-remote" })
-}
+        tags = merge(local.tags, { Name = "Private-Route-Table" })
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-resource "aws_iam_policy" "node_additional" {
-  name        = "${local.name}-additional"
-  description = "Example usage of node additional policy"
+    #Route table associations
+    aws_route_table_association private = {
+        for_each       = var.private_subnets
+        subnet_id      = aws_subnet.private_subnets[each.key].id
+        route_table_id = aws_route_table.private.id
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "ec2:Describe*",
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      },
-    ]
-  })
+        tags = merge(local.tags, local.subnet_tags)
+    }
 
-  tags = local.tags
-}
-
-data "aws_ami" "eks_default" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amazon-eks-node-${local.cluster_version}-v*"]
-  }
-}
-
-data "aws_ami" "eks_default_arm" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amazon-eks-arm64-node-${local.cluster_version}-v*"]
-  }
-}
-
-data "aws_ami" "eks_default_bottlerocket" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["bottlerocket-aws-k8s-${local.cluster_version}-x86_64-*"]
-  }
 }
