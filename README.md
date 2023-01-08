@@ -39,6 +39,8 @@ This section details the deployment and teardown of the three-tier-architecture.
 #### 5.	Execute terraform configuration - Creating the EKS Cluster
 
     terraform apply --auto-approve
+    
+<img width="530" alt="image" src="https://user-images.githubusercontent.com/83971386/211190243-233abc05-3ab5-4290-a613-71ba0938c36c.png">
 
 ### Further Configuration
 Once the Resources have been successfully provisioned, you will then be able to configure kubectl to manage your cluster and deploy Kubernetes configurations to it.
@@ -46,6 +48,12 @@ Once the Resources have been successfully provisioned, you will then be able to 
 #### 1. Configure Kubectl 
 
     aws eks --region <AWS-REGION> update-kubeconfig --name <CLUSTER-NAME>
+    
+<img width="829" alt="image" src="https://user-images.githubusercontent.com/83971386/211190779-d12804a1-22f1-4017-bc3f-4f798bbf548c.png">
+
+**NOTE:** If you receive the following error message when attempting to configure the Kubectl remove the existing kube config file and you should then be able to proceed - `~/.kube/config` 
+
+<img width="835" alt="image" src="https://user-images.githubusercontent.com/83971386/211190758-57979787-0626-4061-9c7a-b1d05caf2cec.png">
 
 ## Verification Steps 
 
@@ -53,17 +61,21 @@ Once the Resources have been successfully provisioned, you will then be able to 
 
     kubectl cluster-info
     
-Enter Image 
+<img width="720" alt="image" src="https://user-images.githubusercontent.com/83971386/211192392-58ba2350-5f7b-4d46-8668-83b2ddd6f194.png">
 
-Or check via the AWS Console.
+**NOTE:** If you receive the error message below when attempting to view the Cluster Information, review the following Github forum page for further advice - https://github.com/hashicorp/terraform-provider-helm/issues/893
 
-Enter Image
+<img width="438" alt="image" src="https://user-images.githubusercontent.com/83971386/211191031-a64d4135-22c9-45e2-9873-e437fe050df5.png">
+
+Or check via the AWS Console GUI -
+
+<img width="653" alt="image" src="https://user-images.githubusercontent.com/83971386/211191064-a0a5933d-126a-4c23-8619-a9264ebdb511.png">
 
 #### 2. Verify the Nodes
 
   kubectl get nodes 
   
-Enter Image
+<img width="538" alt="image" src="https://user-images.githubusercontent.com/83971386/211192410-9584827a-80d7-458a-abdc-e12c315ec5bb.png">
 
 Or check via the AWS Console 
 
@@ -98,3 +110,4 @@ Or check via the AWS Console
 * https://github.com/hashicorp/learn-terraform-provision-eks-cluster
 * https://developer.hashicorp.com/terraform/tutorials/kubernetes/eks
 * https://github.com/terraform-aws-modules/terraform-aws-eks/tree/master/examples/eks_managed_node_group
+* https://github.com/hashicorp/terraform-provider-helm/issues/893
